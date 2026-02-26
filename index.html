@@ -966,12 +966,51 @@ async function syncFromSheets() {
   btn.innerHTML = '<span class="spin">↻</span> Actualizando...';
   btn.disabled = true;
 
+  // Multiple proxy strategies in order of preference
+  const strategies = [
+    // 1. Direct fetch (works if CORS is open — Google Sheets published CSVs sometimes allow it)
+    async () => {
+      const res = await fetch(SHEET_CSV_URL, { mode: 'cors', cache: 'no-cache' });
+      if (!res.ok) throw new Error('direct failed');
+      return await res.text();
+    },
+    // 2. allorigins.win
+    async () => {
+      const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(SHEET_CSV_URL)}`, { cache: 'no-cache' });
+      if (!res.ok) throw new Error('allorigins failed');
+      const j = await res.json();
+      if (!j.contents) throw new Error('allorigins empty');
+      return j.contents;
+    },
+    // 3. corsproxy.io
+    async () => {
+      const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(SHEET_CSV_URL)}`, { cache: 'no-cache' });
+      if (!res.ok) throw new Error('corsproxy failed');
+      return await res.text();
+    },
+    // 4. thingproxy
+    async () => {
+      const res = await fetch(`https://thingproxy.freeboard.io/fetch/${SHEET_CSV_URL}`, { cache: 'no-cache' });
+      if (!res.ok) throw new Error('thingproxy failed');
+      return await res.text();
+    }
+  ];
+
+  let csv = null;
+  let lastError = null;
+
+  for (const strategy of strategies) {
+    try {
+      csv = await strategy();
+      if (csv && csv.length > 50) break; // got valid data
+    } catch(e) {
+      lastError = e;
+      console.warn('Proxy failed, trying next...', e.message);
+    }
+  }
+
   try {
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(SHEET_CSV_URL)}`;
-    const res = await fetch(proxyUrl);
-    if (!res.ok) throw new Error('Error de red');
-    const json = await res.json();
-    const csv = json.contents;
+    if (!csv || csv.length < 50) throw new Error('Todos los proxies fallaron: ' + lastError?.message);
 
     const parsed = parseCSV(csv);
     if (!parsed.length) throw new Error('CSV vacío o sin datos reconocibles');
@@ -997,7 +1036,7 @@ async function syncFromSheets() {
     showToast(`✔ ${rawData.length} equipos actualizados — ${ts}`, 'ok');
   } catch(e) {
     console.error(e);
-    showToast('✖ No se pudo conectar con Google Sheets. Revisá la conexión.', 'err');
+    showToast('✖ No se pudo leer el Sheet. Verificá que esté publicado como CSV.', 'err');
   } finally {
     btn.innerHTML = '⟳ Actualizar desde Sheets';
     btn.disabled = false;
