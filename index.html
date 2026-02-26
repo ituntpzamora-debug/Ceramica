@@ -56,7 +56,7 @@
   /* Header */
   header {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     gap: 24px;
     margin-bottom: 40px;
     padding-bottom: 24px;
@@ -329,7 +329,7 @@
     color: #3b7cff; padding: 8px 16px; border-radius: 20px;
     cursor: pointer; font-size: 12px; font-family: 'DM Sans', sans-serif;
     font-weight: 600; letter-spacing: 0.5px; transition: all 0.2s;
-    margin-left: auto; white-space: nowrap; flex-shrink: 0;
+    white-space: nowrap; flex-shrink: 0;
   }
   .sync-btn:hover { background: rgba(59,124,255,0.15); box-shadow: 0 0 16px rgba(59,124,255,0.3); }
   .sync-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -377,6 +377,9 @@
       <h1>Matriz de Criticidad de Activos</h1>
       <p>Planta Cerámica Marcos Paz &nbsp;·&nbsp; 74 equipos &nbsp;·&nbsp; IC = C1×0.50 + C2×0.30 + C3×0.20 &nbsp;·&nbsp; Rango 1.0 – 5.0</p>
     </div>
+    <button class="sync-btn" id="syncBtn" onclick="syncFromSheets()" style="margin-left:auto">
+      ⟳ Actualizar desde Sheets
+    </button>
   </header>
 
   <div class="stats">    <div class="stat-card A">
@@ -457,7 +460,6 @@
     <button class="filter-btn" data-filter="crit" data-val="A">Clase A</button>
     <button class="filter-btn" data-filter="crit" data-val="B">Clase B</button>
     <button class="filter-btn" data-filter="crit" data-val="C">Clase C</button>
-    <button class="sync-btn" id="syncBtn" onclick="syncFromSheets()">⟳ Actualizar desde Sheets</button>
   </div>
 
   <div class="main-grid">
@@ -1082,165 +1084,6 @@ function showToast(msg, type='info') {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.className = type; }, 4500);
 }
-</script>
-<div id="toast"></div>
-</body>
-</html>
-
-// ── GOOGLE SHEETS SYNC ───────────────────────────────────────
-const STORAGE_KEY = 'cmp_sheet_url';
-
-function toggleConfig() {
-  const panel = document.getElementById('configPanel');
-  const btn = document.getElementById('syncBtn');
-  const isOpen = panel.classList.toggle('open');
-  if (isOpen) {
-    const saved = localStorage.getItem(STORAGE_KEY) || '';
-    document.getElementById('sheetUrl').value = saved;
-    btn.textContent = '✕ Cerrar';
-    btn.style.cssText = 'margin-left:auto;border-color:var(--A);color:var(--A)';
-  } else {
-    btn.textContent = '⚙ Configurar fuente de datos';
-    btn.style.cssText = '';
-  }
-}
-
-async function syncFromSheets() {
-  const url = document.getElementById('sheetUrl').value.trim();
-  if (!url) { showToast('⚠ Pegá la URL del Sheet primero', 'err'); return; }
-  if (!url.includes('docs.google.com')) { showToast('⚠ URL inválida — debe ser de Google Sheets', 'err'); return; }
-
-  localStorage.setItem(STORAGE_KEY, url);
-  const btn = document.getElementById('syncBtn');
-  const origText = btn.innerHTML;
-  btn.innerHTML = '<span class="spin">↻</span> Actualizando...';
-  btn.disabled = true;
-
-  try {
-    // Use a CORS proxy for GitHub Pages
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-    const res = await fetch(proxyUrl);
-    if (!res.ok) throw new Error('Error de red');
-    const json = await res.json();
-    const csv = json.contents;
-
-    const parsed = parseCSV(csv);
-    if (!parsed.length) throw new Error('El CSV está vacío o no tiene datos');
-
-    // Update global rawData
-    rawData.length = 0;
-    parsed.forEach(r => rawData.push(r));
-
-    // Full re-render
-    document.getElementById('filters').innerHTML = '';
-    buildSectorFilters();
-    buildHeatmap();
-
-    if (bubbleChart) bubbleChart.destroy();
-    if (sectorChart) sectorChart.destroy();
-    initBubble();
-    initSectorChart();
-
-    activeFilters = { sector:'todos', crit:'todos-crit' };
-    searchTerm = '';
-    highlightedItem = null;
-    buildTable();
-    updateStats();
-
-    showToast(`✔ ${rawData.length} equipos actualizados desde Google Sheets`, 'ok');
-  } catch(e) {
-    console.error(e);
-    showToast('✖ Error al leer el Sheet — verificá la URL y que esté publicado como CSV', 'err');
-  } finally {
-    btn.innerHTML = '⟳ Sincronizar ahora';
-    btn.disabled = false;
-  }
-}
-
-function parseCSV(csv) {
-  const lines = csv.split('\n').map(l => l.trim()).filter(Boolean);
-  if (lines.length < 2) return [];
-
-  // Find header row — look for row containing "TAG"
-  let headerIdx = 0;
-  for (let i = 0; i < Math.min(5, lines.length); i++) {
-    if (lines[i].toUpperCase().includes('TAG')) { headerIdx = i; break; }
-  }
-
-  const headers = lines[headerIdx].split(',').map(h => h.trim().toLowerCase().replace(/[^a-z0-9]/g,''));
-  const results = [];
-
-  // Map column names flexibly
-  const col = (h, ...keys) => {
-    for (const k of keys) {
-      const idx = headers.findIndex(hh => hh.includes(k));
-      if (idx >= 0) return h[idx]?.trim() || '';
-    }
-    return '';
-  };
-
-  for (let i = headerIdx + 1; i < lines.length; i++) {
-    const parts = lines[i].split(',');
-    if (parts.length < 5) continue;
-
-    const item   = parseInt(col(parts,'item','')) || i;
-    const tag    = col(parts,'tag');
-    const elem   = col(parts,'elemento','element');
-    const sector = col(parts,'sector');
-    const prod   = col(parts,'para','prod');
-    const c1     = parseInt(col(parts,'c1','50')) || 1;
-    const c2     = parseInt(col(parts,'c2','30')) || 1;
-    const c3     = parseInt(col(parts,'c3','20')) || 1;
-    const ic     = parseFloat(col(parts,'ic','indice','ndice')) || parseFloat((c1*0.5+c2*0.3+c3*0.2).toFixed(1));
-    const crit   = (col(parts,'criticidad','crit','clase') || (ic>=4?'A':ic>=2.5?'B':'C')).toUpperCase().trim();
-
-    if (!tag) continue;
-    results.push({ item, tag, elemento: elem, sector: sector||'Sin sector', prod: prod||'NO', c1, c2, c3, ic, crit });
-  }
-  return results;
-}
-
-function updateStats() {
-  const a = rawData.filter(d=>d.crit==='A').length;
-  const b = rawData.filter(d=>d.crit==='B').length;
-  const c = rawData.filter(d=>d.crit==='C').length;
-  const maxIc = Math.max(...rawData.map(d=>d.ic)).toFixed(1);
-  const cards = document.querySelectorAll('.stat-num');
-  if (cards[0]) cards[0].textContent = a;
-  if (cards[1]) cards[1].textContent = b;
-  if (cards[2]) cards[2].textContent = c;
-  if (cards[3]) cards[3].textContent = maxIc;
-}
-
-let toastTimer;
-function showToast(msg, type='info') {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = `show ${type}`;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.className = type; }, 4000);
-}
-
-// On load: show saved URL and wire button
-window.addEventListener('load', () => {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) {
-    document.getElementById('sheetUrl').value = saved;
-    // Update button to show sync option
-    document.getElementById('syncBtn').innerHTML = '⟳ Sincronizar desde Sheets';
-    document.getElementById('syncBtn').onclick = null;
-    document.getElementById('syncBtn').addEventListener('click', () => {
-      const panel = document.getElementById('configPanel');
-      if (!panel.classList.contains('open')) {
-        panel.classList.add('open');
-        document.getElementById('syncBtn').textContent = '⟳ Sincronizar ahora';
-        document.getElementById('syncBtn').onclick = syncFromSheets;
-      } else {
-        syncFromSheets();
-      }
-    });
-  }
-});
 </script>
 <div id="toast"></div>
 </body>
